@@ -22,11 +22,25 @@ function toGrowthPoint(snap: QueryDocumentSnapshot<DocumentData>): GrowthPoint {
 
 export function subscribeToGrowth(
   onUpdate: (points: GrowthPoint[]) => void,
+  onError?: (err: Error) => void,
 ): () => void {
   const q = query(collection(db, COL), orderBy("day", "asc"));
-  return onSnapshot(q, snap => {
-    onUpdate(snap.docs.map(toGrowthPoint));
-  });
+  return onSnapshot(
+    q,
+    snap => {
+      console.log(`[Charlie Firestore] growth snapshot: ${snap.docs.length} docs`);
+      const points: GrowthPoint[] = [];
+      snap.docs.forEach(d => {
+        try { points.push(toGrowthPoint(d)); }
+        catch (e) { console.warn('[Charlie Firestore] skipping malformed growth doc', d.id, e); }
+      });
+      onUpdate(points);
+    },
+    err => {
+      console.error('[Charlie Firestore] growth subscription error:', err.message);
+      onError?.(err);
+    },
+  );
 }
 
 export async function fsAddGrowth(point: Omit<GrowthPoint, "id">): Promise<string> {

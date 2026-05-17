@@ -23,22 +23,35 @@ function toAppEvent(snap: QueryDocumentSnapshot<DocumentData>): AppEvent {
 export function subscribeToHistory(
   fromDate: Date,
   onUpdate: (history: Record<string, AppEvent[]>) => void,
+  onError?: (err: Error) => void,
 ): () => void {
   const q = query(
     collection(db, COL),
     where("start", ">=", Timestamp.fromDate(fromDate)),
     orderBy("start", "asc"),
   );
-  return onSnapshot(q, snap => {
-    const history: Record<string, AppEvent[]> = {};
-    snap.docs.forEach(d => {
-      const ev = toAppEvent(d);
-      const key = d.data().date as string;
-      if (!history[key]) history[key] = [];
-      history[key].push(ev);
-    });
-    onUpdate(history);
-  });
+  return onSnapshot(
+    q,
+    snap => {
+      console.log(`[Charlie Firestore] events snapshot: ${snap.docs.length} docs`);
+      const history: Record<string, AppEvent[]> = {};
+      snap.docs.forEach(d => {
+        try {
+          const ev = toAppEvent(d);
+          const key = d.data().date as string;
+          if (!history[key]) history[key] = [];
+          history[key].push(ev);
+        } catch (e) {
+          console.warn('[Charlie Firestore] skipping malformed event doc', d.id, e);
+        }
+      });
+      onUpdate(history);
+    },
+    err => {
+      console.error('[Charlie Firestore] events subscription error:', err.message);
+      onError?.(err);
+    },
+  );
 }
 
 export async function fsAddEvent(

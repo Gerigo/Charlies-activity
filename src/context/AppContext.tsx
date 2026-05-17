@@ -228,6 +228,7 @@ interface AppContextValue {
   tweaks: Tweaks;
   setTweak: <K extends keyof Tweaks>(key: K, value: Tweaks[K]) => void;
   palette: Palette;
+  firebaseError: string | null;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -236,6 +237,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, rawDispatch] = useReducer(reducer, undefined, buildInitialState);
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
+
+  const [firebaseError, setFirebaseError] = useState<string | null>(null);
 
   const [tweaks, setTweaks] = useState<Tweaks>(() => {
     if (typeof window === 'undefined') return TWEAK_DEFAULTS;
@@ -251,10 +254,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // ─── Firestore subscriptions ─────────────────────────────────────────────
   useEffect(() => {
+    console.log('[Charlie] Firebase mode:', IS_FIREBASE, '| project:', process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? '(not set)');
     if (!IS_FIREBASE) return;
+
     const from = new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate() - 44);
-    const unsub1 = subscribeToHistory(from, history => rawDispatch({ type: 'LOAD_HISTORY', history }));
-    const unsub2 = subscribeToGrowth(growth => rawDispatch({ type: 'LOAD_GROWTH', growth }));
+    const handleError = (err: Error) => setFirebaseError(err.message);
+
+    const unsub1 = subscribeToHistory(
+      from,
+      history => rawDispatch({ type: 'LOAD_HISTORY', history }),
+      handleError,
+    );
+    const unsub2 = subscribeToGrowth(
+      growth => rawDispatch({ type: 'LOAD_GROWTH', growth }),
+      handleError,
+    );
     return () => { unsub1(); unsub2(); };
   }, []);
 
@@ -377,7 +391,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const palette = PALETTES[tweaks.palette];
 
   return (
-    <AppContext.Provider value={{ state, dispatch, tweaks, setTweak, palette }}>
+    <AppContext.Provider value={{ state, dispatch, tweaks, setTweak, palette, firebaseError }}>
       {children}
     </AppContext.Provider>
   );
