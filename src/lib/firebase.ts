@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore, getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
 const firebaseConfig = {
@@ -13,7 +13,17 @@ const firebaseConfig = {
 
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
-export const db = getFirestore(app);
+// Use initializeFirestore with auto long-polling detection for Safari compatibility.
+// Falls back to getFirestore if already initialized (e.g. Next.js HMR).
+function initDb() {
+  try {
+    return initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+  } catch {
+    return getFirestore(app);
+  }
+}
+
+export const db = initDb();
 export const auth = getAuth(app);
 export const isFirebaseConfigured = !!firebaseConfig.projectId;
 export default app;
