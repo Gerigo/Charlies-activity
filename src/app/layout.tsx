@@ -1,8 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Manrope, Instrument_Serif } from "next/font/google";
 import "./globals.css";
-import { AppProvider } from "@/context/AppContext";
-import BottomNav from "@/components/ui/BottomNav";
+import { AuthProvider } from "@/context/AuthContext";
+import AuthGate from "@/components/AuthGate";
 
 const manrope = Manrope({
   variable: "--font-manrope",
@@ -40,14 +40,11 @@ export default function RootLayout({
   return (
     <html lang="fr" className={`${manrope.variable} ${instrumentSerif.variable}`}>
       <body style={{ margin: 0, padding: 0, minHeight: '100dvh', fontFamily: 'var(--font-manrope)', WebkitFontSmoothing: 'antialiased' }}>
-        <AppProvider>
-          <div style={{ maxWidth: 430, margin: '0 auto', height: '100dvh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
-            <main style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
-              {children}
-            </main>
-            <BottomNav />
-          </div>
-        </AppProvider>
+        <AuthProvider>
+          <AuthGate>
+            {children}
+          </AuthGate>
+        </AuthProvider>
       </body>
     </html>
   );
