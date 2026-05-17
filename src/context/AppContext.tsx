@@ -364,6 +364,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           start: newStart,
           data: { ...ev.data, note: action.data.note },
           date: dateKey(dayDate),
+          type: ev.type,
         };
         if (action.data.endTime) {
           patch.end = dateAtTime(dayDate, action.data.endTime.h, action.data.endTime.m);

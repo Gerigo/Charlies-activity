@@ -1,39 +1,32 @@
 import {
   collection, doc, addDoc, deleteDoc,
-  onSnapshot, query, orderBy, Timestamp,
-  DocumentData, QueryDocumentSnapshot,
+  onSnapshot, query, where,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, auth } from "@/lib/firebase";
 import { GrowthPoint } from "@/lib/sampleData";
+import { LEGACY_SCOPE, legacyToGrowth, growthToLegacy } from "./legacyAdapter";
 
-const COL = "growth";
-
-function toGrowthPoint(snap: QueryDocumentSnapshot<DocumentData>): GrowthPoint {
-  const d = snap.data();
-  return {
-    id: snap.id,
-    date: (d.date as Timestamp).toDate(),
-    day: d.day,
-    poids: d.poids,
-    taille: d.taille,
-    pc: d.pc,
-  };
-}
+const COL = "events";
 
 export function subscribeToGrowth(
   onUpdate: (points: GrowthPoint[]) => void,
   onError?: (err: Error) => void,
 ): () => void {
-  const q = query(collection(db, COL), orderBy("day", "asc"));
+  const q = query(collection(db, COL), where("trackerId", "==", LEGACY_SCOPE));
   return onSnapshot(
     q,
     snap => {
-      console.log(`[Charlie Firestore] growth snapshot: ${snap.docs.length} docs`);
       const points: GrowthPoint[] = [];
-      snap.docs.forEach(d => {
-        try { points.push(toGrowthPoint(d)); }
-        catch (e) { console.warn('[Charlie Firestore] skipping malformed growth doc', d.id, e); }
+      snap.docs.forEach(docSnap => {
+        try {
+          const gp = legacyToGrowth(docSnap.id, docSnap.data());
+          if (gp) points.push(gp);
+        } catch (e) {
+          console.warn('[Charlie Firestore] skipping malformed growth doc', docSnap.id, e);
+        }
       });
+      points.sort((a, b) => a.day - b.day);
+      console.log(`[Charlie Firestore] growth points: ${points.length}`);
       onUpdate(points);
     },
     err => {
@@ -44,14 +37,7 @@ export function subscribeToGrowth(
 }
 
 export async function fsAddGrowth(point: Omit<GrowthPoint, "id">): Promise<string> {
-  const ref = await addDoc(collection(db, COL), {
-    date: Timestamp.fromDate(point.date),
-    day: point.day,
-    poids: point.poids,
-    taille: point.taille,
-    pc: point.pc,
-    createdAt: Timestamp.fromDate(new Date()),
-  });
+  const ref = await addDoc(collection(db, COL), growthToLegacy(point, auth.currentUser?.uid ?? 'unknown'));
   return ref.id;
 }
 

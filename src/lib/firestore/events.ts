@@ -1,50 +1,39 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
-  onSnapshot, query, where, orderBy, Timestamp,
-  DocumentData, QueryDocumentSnapshot,
+  onSnapshot, query, where,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, auth } from "@/lib/firebase";
 import { AppEvent, AppEventType, dateKey } from "@/lib/sampleData";
+import { LEGACY_SCOPE, legacyToAppEvent, appEventToLegacy } from "./legacyAdapter";
 
 const COL = "events";
-
-function toAppEvent(snap: QueryDocumentSnapshot<DocumentData>): AppEvent {
-  const d = snap.data();
-  return {
-    id: snap.id,
-    type: d.type as AppEventType,
-    start: (d.start as Timestamp).toDate(),
-    end: d.end ? (d.end as Timestamp).toDate() : null,
-    dur: d.dur ?? 0,
-    data: d.data ?? {},
-  };
-}
 
 export function subscribeToHistory(
   fromDate: Date,
   onUpdate: (history: Record<string, AppEvent[]>) => void,
   onError?: (err: Error) => void,
 ): () => void {
-  const q = query(
-    collection(db, COL),
-    where("start", ">=", Timestamp.fromDate(fromDate)),
-    orderBy("start", "asc"),
-  );
+  const q = query(collection(db, COL), where("trackerId", "==", LEGACY_SCOPE));
+  const fromMs = fromDate.getTime();
   return onSnapshot(
     q,
     snap => {
       console.log(`[Charlie Firestore] events snapshot: ${snap.docs.length} docs`);
       const history: Record<string, AppEvent[]> = {};
-      snap.docs.forEach(d => {
+      snap.docs.forEach(docSnap => {
         try {
-          const ev = toAppEvent(d);
-          const key = d.data().date as string;
+          const raw = docSnap.data();
+          const ev = legacyToAppEvent(docSnap.id, raw);
+          if (!ev) return; // growth or unknown type
+          if (ev.start.getTime() < fromMs) return; // outside the window
+          const key = dateKey(ev.start);
           if (!history[key]) history[key] = [];
           history[key].push(ev);
         } catch (e) {
-          console.warn('[Charlie Firestore] skipping malformed event doc', d.id, e);
+          console.warn('[Charlie Firestore] skipping malformed event doc', docSnap.id, e);
         }
       });
+      Object.values(history).forEach(list => list.sort((a, b) => a.start.getTime() - b.start.getTime()));
       onUpdate(history);
     },
     err => {
@@ -54,32 +43,36 @@ export function subscribeToHistory(
   );
 }
 
+function currentUid(): string {
+  return auth.currentUser?.uid ?? 'unknown';
+}
+
 export async function fsAddEvent(
   ev: Omit<AppEvent, "id">,
-  date: string,
+  _date: string,
 ): Promise<string> {
-  const ref = await addDoc(collection(db, COL), {
-    type: ev.type,
-    date,
-    start: Timestamp.fromDate(ev.start),
-    end: ev.end ? Timestamp.fromDate(ev.end) : null,
-    dur: ev.dur,
-    data: ev.data,
-    createdAt: Timestamp.fromDate(new Date()),
-  });
+  const ref = await addDoc(collection(db, COL), appEventToLegacy(ev, currentUid()));
   return ref.id;
 }
 
 export async function fsUpdateEvent(
   id: string,
-  patch: { start?: Date; end?: Date | null; dur?: number; data?: Record<string, unknown>; date?: string },
+  patch: {
+    start?: Date; end?: Date | null; dur?: number;
+    data?: AppEvent["data"]; date?: string; type?: AppEventType;
+  },
 ): Promise<void> {
-  const updates: Record<string, unknown> = { updatedAt: Timestamp.fromDate(new Date()) };
-  if (patch.start) updates.start = Timestamp.fromDate(patch.start);
-  if (patch.end !== undefined) updates.end = patch.end ? Timestamp.fromDate(patch.end) : null;
-  if (patch.dur !== undefined) updates.dur = patch.dur;
-  if (patch.data) updates.data = patch.data;
-  if (patch.date) updates.date = patch.date;
+  const updates: Record<string, unknown> = { updatedAt: Date.now() };
+  if (patch.start) updates.startTime = patch.start.getTime();
+  if (patch.end !== undefined) updates.endTime = patch.end ? patch.end.getTime() : null;
+  if (patch.data && patch.type && patch.start) {
+    const legacy = appEventToLegacy(
+      { type: patch.type, start: patch.start, end: patch.end ?? null, data: patch.data },
+      currentUid(),
+    );
+    updates.details = legacy.details;
+    updates.notes = legacy.notes;
+  }
   await updateDoc(doc(db, COL, id), updates);
 }
 
