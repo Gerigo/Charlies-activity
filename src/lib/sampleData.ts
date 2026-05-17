@@ -29,6 +29,7 @@ export interface AppEvent {
 }
 
 export interface GrowthPoint {
+  id?: string;
   date: Date;
   day: number;
   poids: number;

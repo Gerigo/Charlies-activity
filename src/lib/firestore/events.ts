@@ -1,142 +1,75 @@
 import {
-  collection,
-  doc,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  getDocs,
-  getDoc,
-  query,
-  where,
-  orderBy,
-  Timestamp,
-  DocumentData,
-  QueryDocumentSnapshot,
+  collection, doc, addDoc, updateDoc, deleteDoc,
+  onSnapshot, query, where, orderBy, Timestamp,
+  DocumentData, QueryDocumentSnapshot,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { BabyEvent, EventDetail } from "@/types";
+import { AppEvent, AppEventType, dateKey } from "@/lib/sampleData";
 
-const COLLECTION = "events";
+const COL = "events";
 
-// ─── Converters ────────────────────────────────────────────────────────────────
-
-function toEvent(snap: QueryDocumentSnapshot<DocumentData>): BabyEvent {
+function toAppEvent(snap: QueryDocumentSnapshot<DocumentData>): AppEvent {
   const d = snap.data();
   return {
     id: snap.id,
-    date: d.date,
-    startTime: (d.startTime as Timestamp).toDate(),
-    endTime: d.endTime ? (d.endTime as Timestamp).toDate() : undefined,
-    detail: d.detail as EventDetail,
-    notes: d.notes ?? undefined,
-    createdAt: (d.createdAt as Timestamp).toDate(),
-    updatedAt: (d.updatedAt as Timestamp).toDate(),
+    type: d.type as AppEventType,
+    start: (d.start as Timestamp).toDate(),
+    end: d.end ? (d.end as Timestamp).toDate() : null,
+    dur: d.dur ?? 0,
+    data: d.data ?? {},
   };
 }
 
-// ─── Queries ───────────────────────────────────────────────────────────────────
-
-/** Fetch all events for a given day (YYYY-MM-DD). */
-export async function getEventsForDay(date: string): Promise<BabyEvent[]> {
+export function subscribeToHistory(
+  fromDate: Date,
+  onUpdate: (history: Record<string, AppEvent[]>) => void,
+): () => void {
   const q = query(
-    collection(db, COLLECTION),
-    where("date", "==", date),
-    orderBy("startTime", "asc")
+    collection(db, COL),
+    where("start", ">=", Timestamp.fromDate(fromDate)),
+    orderBy("start", "asc"),
   );
-  const snap = await getDocs(q);
-  return snap.docs.map(toEvent);
+  return onSnapshot(q, snap => {
+    const history: Record<string, AppEvent[]> = {};
+    snap.docs.forEach(d => {
+      const ev = toAppEvent(d);
+      const key = d.data().date as string;
+      if (!history[key]) history[key] = [];
+      history[key].push(ev);
+    });
+    onUpdate(history);
+  });
 }
 
-/** Fetch events across a date range (inclusive). */
-export async function getEventsForRange(
-  from: string,
-  to: string
-): Promise<BabyEvent[]> {
-  const q = query(
-    collection(db, COLLECTION),
-    where("date", ">=", from),
-    where("date", "<=", to),
-    orderBy("date", "asc"),
-    orderBy("startTime", "asc")
-  );
-  const snap = await getDocs(q);
-  return snap.docs.map(toEvent);
-}
-
-/** Fetch the currently active sleep event, if any. */
-export async function getActiveSleep(): Promise<BabyEvent | null> {
-  const q = query(
-    collection(db, COLLECTION),
-    where("detail.type", "==", "sleep"),
-    where("detail.isActive", "==", true)
-  );
-  const snap = await getDocs(q);
-  if (snap.empty) return null;
-  return toEvent(snap.docs[0]);
-}
-
-// ─── Mutations ─────────────────────────────────────────────────────────────────
-
-export async function addEvent(
-  detail: EventDetail,
-  opts?: { notes?: string; startTime?: Date }
+export async function fsAddEvent(
+  ev: Omit<AppEvent, "id">,
+  date: string,
 ): Promise<string> {
-  const now = new Date();
-  const startTime = opts?.startTime ?? now;
-  const date = startTime.toISOString().slice(0, 10);
-
-  const ref = await addDoc(collection(db, COLLECTION), {
+  const ref = await addDoc(collection(db, COL), {
+    type: ev.type,
     date,
-    startTime: Timestamp.fromDate(startTime),
-    detail,
-    notes: opts?.notes ?? null,
-    createdAt: Timestamp.fromDate(now),
-    updatedAt: Timestamp.fromDate(now),
+    start: Timestamp.fromDate(ev.start),
+    end: ev.end ? Timestamp.fromDate(ev.end) : null,
+    dur: ev.dur,
+    data: ev.data,
+    createdAt: Timestamp.fromDate(new Date()),
   });
   return ref.id;
 }
 
-export async function updateEvent(
+export async function fsUpdateEvent(
   id: string,
-  patch: {
-    detail?: Partial<EventDetail>;
-    notes?: string;
-    startTime?: Date;
-    endTime?: Date;
-  }
+  patch: { start?: Date; end?: Date | null; dur?: number; data?: Record<string, unknown>; date?: string },
 ): Promise<void> {
-  const ref = doc(db, COLLECTION, id);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) throw new Error(`Event ${id} not found`);
-
-  const existing = snap.data();
-  const updates: Record<string, unknown> = {
-    updatedAt: Timestamp.fromDate(new Date()),
-  };
-
-  if (patch.detail) {
-    updates.detail = { ...existing.detail, ...patch.detail };
-  }
-  if (patch.notes !== undefined) updates.notes = patch.notes;
-  if (patch.startTime) {
-    updates.startTime = Timestamp.fromDate(patch.startTime);
-    updates.date = patch.startTime.toISOString().slice(0, 10);
-  }
-  if (patch.endTime) updates.endTime = Timestamp.fromDate(patch.endTime);
-
-  await updateDoc(ref, updates);
+  const updates: Record<string, unknown> = { updatedAt: Timestamp.fromDate(new Date()) };
+  if (patch.start) updates.start = Timestamp.fromDate(patch.start);
+  if (patch.end !== undefined) updates.end = patch.end ? Timestamp.fromDate(patch.end) : null;
+  if (patch.dur !== undefined) updates.dur = patch.dur;
+  if (patch.data) updates.data = patch.data;
+  if (patch.date) updates.date = patch.date;
+  await updateDoc(doc(db, COL, id), updates);
 }
 
-export async function deleteEvent(id: string): Promise<void> {
-  await deleteDoc(doc(db, COLLECTION, id));
-}
-
-/** Stop an active sleep: sets isActive=false and records endTime. */
-export async function stopSleep(id: string): Promise<void> {
-  const now = new Date();
-  await updateDoc(doc(db, COLLECTION, id), {
-    "detail.isActive": false,
-    endTime: Timestamp.fromDate(now),
-    updatedAt: Timestamp.fromDate(now),
-  });
+export async function fsDeleteEvent(id: string): Promise<void> {
+  await deleteDoc(doc(db, COL, id));
 }

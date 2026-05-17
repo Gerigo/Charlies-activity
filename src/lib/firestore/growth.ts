@@ -1,84 +1,46 @@
 import {
-  collection,
-  doc,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  getDocs,
-  query,
-  where,
-  orderBy,
-  Timestamp,
-  DocumentData,
-  QueryDocumentSnapshot,
+  collection, doc, addDoc, deleteDoc,
+  onSnapshot, query, orderBy, Timestamp,
+  DocumentData, QueryDocumentSnapshot,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { GrowthMeasurement } from "@/types";
+import { GrowthPoint } from "@/lib/sampleData";
 
-const COLLECTION = "growth";
+const COL = "growth";
 
-function toMeasurement(
-  snap: QueryDocumentSnapshot<DocumentData>
-): GrowthMeasurement {
+function toGrowthPoint(snap: QueryDocumentSnapshot<DocumentData>): GrowthPoint {
   const d = snap.data();
   return {
     id: snap.id,
-    date: d.date,
-    weight: d.weight ?? undefined,
-    height: d.height ?? undefined,
-    headCircumference: d.headCircumference ?? undefined,
-    notes: d.notes ?? undefined,
-    createdAt: (d.createdAt as Timestamp).toDate(),
-    updatedAt: (d.updatedAt as Timestamp).toDate(),
+    date: (d.date as Timestamp).toDate(),
+    day: d.day,
+    poids: d.poids,
+    taille: d.taille,
+    pc: d.pc,
   };
 }
 
-export async function getAllMeasurements(): Promise<GrowthMeasurement[]> {
-  const q = query(collection(db, COLLECTION), orderBy("date", "asc"));
-  const snap = await getDocs(q);
-  return snap.docs.map(toMeasurement);
+export function subscribeToGrowth(
+  onUpdate: (points: GrowthPoint[]) => void,
+): () => void {
+  const q = query(collection(db, COL), orderBy("day", "asc"));
+  return onSnapshot(q, snap => {
+    onUpdate(snap.docs.map(toGrowthPoint));
+  });
 }
 
-export async function getMeasurementsForRange(
-  from: string,
-  to: string
-): Promise<GrowthMeasurement[]> {
-  const q = query(
-    collection(db, COLLECTION),
-    where("date", ">=", from),
-    where("date", "<=", to),
-    orderBy("date", "asc")
-  );
-  const snap = await getDocs(q);
-  return snap.docs.map(toMeasurement);
-}
-
-export async function addMeasurement(
-  data: Omit<GrowthMeasurement, "id" | "createdAt" | "updatedAt">
-): Promise<string> {
-  const now = new Date();
-  const ref = await addDoc(collection(db, COLLECTION), {
-    ...data,
-    weight: data.weight ?? null,
-    height: data.height ?? null,
-    headCircumference: data.headCircumference ?? null,
-    notes: data.notes ?? null,
-    createdAt: Timestamp.fromDate(now),
-    updatedAt: Timestamp.fromDate(now),
+export async function fsAddGrowth(point: Omit<GrowthPoint, "id">): Promise<string> {
+  const ref = await addDoc(collection(db, COL), {
+    date: Timestamp.fromDate(point.date),
+    day: point.day,
+    poids: point.poids,
+    taille: point.taille,
+    pc: point.pc,
+    createdAt: Timestamp.fromDate(new Date()),
   });
   return ref.id;
 }
 
-export async function updateMeasurement(
-  id: string,
-  patch: Partial<Omit<GrowthMeasurement, "id" | "createdAt" | "updatedAt">>
-): Promise<void> {
-  await updateDoc(doc(db, COLLECTION, id), {
-    ...patch,
-    updatedAt: Timestamp.fromDate(new Date()),
-  });
-}
-
-export async function deleteMeasurement(id: string): Promise<void> {
-  await deleteDoc(doc(db, COLLECTION, id));
+export async function fsDeleteGrowth(id: string): Promise<void> {
+  await deleteDoc(doc(db, COL, id));
 }

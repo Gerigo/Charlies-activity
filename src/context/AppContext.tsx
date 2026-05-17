@@ -1,11 +1,16 @@
 "use client";
 
-import React, { createContext, useContext, useReducer, useState, useEffect, useCallback } from 'react';
+import React, {
+  createContext, useContext, useReducer, useState,
+  useEffect, useCallback, useRef,
+} from 'react';
 import {
   AppEvent, GrowthPoint, DayStats,
   SAMPLE_HISTORY, GROWTH as GROWTH_DATA,
   TODAY, dateKey, dateAtTime, durationMin, statsForDate, ageInDays,
 } from '@/lib/sampleData';
+import { subscribeToHistory, fsAddEvent, fsUpdateEvent, fsDeleteEvent } from '@/lib/firestore/events';
+import { subscribeToGrowth, fsAddGrowth } from '@/lib/firestore/growth';
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
 export const PALETTES = {
@@ -54,6 +59,7 @@ export interface AppState {
   growth: GrowthPoint[];
   activeSleep: { start: Date; id: string } | null;
   sheet: SheetState | null;
+  loaded: boolean;
 }
 
 type Action =
@@ -61,6 +67,7 @@ type Action =
   | { type: 'OPEN_EDIT'; event: AppEvent }
   | { type: 'START_SLEEP' }
   | { type: 'STOP_SLEEP' }
+  | { type: 'SET_ACTIVE_SLEEP_ID'; id: string }
   | { type: 'ADD_FEED'; data: { kind: string; breast?: 'G'|'D'|null; ml?: number|null; time: { h: number; m: number }; note: string } }
   | { type: 'ADD_PUMP'; data: { breast: string; ml: number; time: { h: number; m: number }; note: string } }
   | { type: 'ADD_DIAPER'; data: { pipi: boolean; caca: boolean; color: string|null; time: { h: number; m: number }; note: string } }
@@ -68,10 +75,25 @@ type Action =
   | { type: 'ADD_TEMP'; data: { value: number; slot: string; time: { h: number; m: number }; note: string } }
   | { type: 'ADD_GROWTH'; data: { poids: number; taille: number; pc: number; date: Date } }
   | { type: 'EDIT_EVENT'; id: string; data: { time: { h: number; m: number }; endTime?: { h: number; m: number }|null; note: string } }
-  | { type: 'DELETE_EVENT'; id: string };
+  | { type: 'DELETE_EVENT'; id: string }
+  | { type: 'LOAD_HISTORY'; history: Record<string, AppEvent[]> }
+  | { type: 'LOAD_GROWTH'; growth: GrowthPoint[] };
+
+const IS_FIREBASE = !!process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
 
 function buildInitialState(): AppState {
-  return { history: SAMPLE_HISTORY, growth: GROWTH_DATA, activeSleep: null, sheet: null };
+  if (IS_FIREBASE) {
+    return { history: {}, growth: [], activeSleep: null, sheet: null, loaded: false };
+  }
+  return { history: SAMPLE_HISTORY, growth: GROWTH_DATA, activeSleep: null, sheet: null, loaded: true };
+}
+
+function findEventDay(history: Record<string, AppEvent[]>, id: string): { ev: AppEvent; key: string } | null {
+  for (const [key, events] of Object.entries(history)) {
+    const ev = events.find(e => e.id === id);
+    if (ev) return { ev, key };
+  }
+  return null;
 }
 
 function reducer(state: AppState, action: Action): AppState {
@@ -82,13 +104,16 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_SHEET': return { ...state, sheet: action.sheet };
     case 'OPEN_EDIT': return { ...state, sheet: { type: 'edit', event: action.event } };
 
+    case 'SET_ACTIVE_SLEEP_ID':
+      return { ...state, activeSleep: state.activeSleep ? { ...state.activeSleep, id: action.id } : null };
+
     case 'START_SLEEP': {
       const ev: AppEvent = {
-        id: `s-${todayKey}-active-${Date.now()}`, type: 'sleep',
+        id: `s-${Date.now()}`, type: 'sleep',
         start: new Date(), end: null, dur: 0, data: { note: '' },
       };
       return {
-        ...state, activeSleep: { start: new Date(), id: ev.id },
+        ...state, activeSleep: { start: ev.start, id: ev.id },
         history: { ...state.history, [todayKey]: [...today, ev].sort((a, b) => a.start.getTime() - b.start.getTime()) },
       };
     }
@@ -106,7 +131,7 @@ function reducer(state: AppState, action: Action): AppState {
       const start = dateAtTime(TODAY, d.time.h, d.time.m);
       const dur = d.kind === 'sein' ? 18 : 15;
       const ev: AppEvent = {
-        id: `f-${todayKey}-${Date.now()}`, type: 'feed',
+        id: `f-${Date.now()}`, type: 'feed',
         start, end: new Date(start.getTime() + dur * 60000), dur,
         data: { kind: d.kind, breast: d.breast ?? undefined, ml: d.ml, note: d.note },
       };
@@ -116,7 +141,7 @@ function reducer(state: AppState, action: Action): AppState {
       const d = action.data;
       const start = dateAtTime(TODAY, d.time.h, d.time.m);
       const ev: AppEvent = {
-        id: `p-${todayKey}-${Date.now()}`, type: 'pump',
+        id: `p-${Date.now()}`, type: 'pump',
         start, end: start, dur: 0, data: { breast: d.breast as 'G'|'D', ml: d.ml, note: d.note },
       };
       return { ...state, history: { ...state.history, [todayKey]: [...today, ev].sort((a, b) => a.start.getTime() - b.start.getTime()) } };
@@ -125,7 +150,7 @@ function reducer(state: AppState, action: Action): AppState {
       const d = action.data;
       const start = dateAtTime(TODAY, d.time.h, d.time.m);
       const ev: AppEvent = {
-        id: `d-${todayKey}-${Date.now()}`, type: 'diaper',
+        id: `d-${Date.now()}`, type: 'diaper',
         start, end: start, dur: 0, data: { pipi: d.pipi, caca: d.caca, color: d.color, note: d.note },
       };
       return { ...state, history: { ...state.history, [todayKey]: [...today, ev].sort((a, b) => a.start.getTime() - b.start.getTime()) } };
@@ -134,7 +159,7 @@ function reducer(state: AppState, action: Action): AppState {
       const d = action.data;
       const start = dateAtTime(TODAY, d.time.h, d.time.m);
       const ev: AppEvent = {
-        id: `c-${todayKey}-${Date.now()}`, type: 'care',
+        id: `c-${Date.now()}`, type: 'care',
         start, end: start, dur: 0, data: { kind: d.kind, custom: d.custom, note: d.note },
       };
       return { ...state, history: { ...state.history, [todayKey]: [...today, ev].sort((a, b) => a.start.getTime() - b.start.getTime()) } };
@@ -143,7 +168,7 @@ function reducer(state: AppState, action: Action): AppState {
       const d = action.data;
       const start = dateAtTime(TODAY, d.time.h, d.time.m);
       const ev: AppEvent = {
-        id: `t-${todayKey}-${Date.now()}`, type: 'temp',
+        id: `t-${Date.now()}`, type: 'temp',
         start, end: start, dur: 0, data: { value: d.value, slot: d.slot, note: d.note },
       };
       return { ...state, history: { ...state.history, [todayKey]: [...today, ev].sort((a, b) => a.start.getTime() - b.start.getTime()) } };
@@ -154,25 +179,43 @@ function reducer(state: AppState, action: Action): AppState {
       const point: GrowthPoint = { date: d.date, day, poids: d.poids, taille: d.taille, pc: d.pc };
       return { ...state, growth: [...state.growth, point].sort((a, b) => a.day - b.day) };
     }
+
     case 'EDIT_EVENT': {
-      const updated = today.map(e => {
-        if (e.id !== action.id) return e;
-        const d = action.data;
-        const newStart = dateAtTime(TODAY, d.time.h, d.time.m);
-        let newEnd = e.end;
-        let newDur = e.dur;
-        if (d.endTime) {
-          newEnd = dateAtTime(TODAY, d.endTime.h, d.endTime.m);
-          newDur = durationMin(newStart, newEnd);
-        } else if (e.dur > 0) {
-          newEnd = new Date(newStart.getTime() + e.dur * 60000);
-        }
-        return { ...e, start: newStart, end: newEnd, dur: newDur, data: { ...e.data, note: d.note } };
-      }).sort((a, b) => a.start.getTime() - b.start.getTime());
-      return { ...state, history: { ...state.history, [todayKey]: updated } };
+      const found = findEventDay(state.history, action.id);
+      if (!found) return state;
+      const { ev, key } = found;
+      const dayDate = new Date(ev.start.getFullYear(), ev.start.getMonth(), ev.start.getDate());
+      const newStart = dateAtTime(dayDate, action.data.time.h, action.data.time.m);
+      let newEnd = ev.end;
+      let newDur = ev.dur;
+      if (action.data.endTime) {
+        newEnd = dateAtTime(dayDate, action.data.endTime.h, action.data.endTime.m);
+        newDur = durationMin(newStart, newEnd);
+      } else if (ev.dur > 0) {
+        newEnd = new Date(newStart.getTime() + ev.dur * 60000);
+      }
+      const updatedEvents = state.history[key]
+        .map(e => e.id === action.id ? { ...e, start: newStart, end: newEnd, dur: newDur, data: { ...e.data, note: action.data.note } } : e)
+        .sort((a, b) => a.start.getTime() - b.start.getTime());
+      return { ...state, history: { ...state.history, [key]: updatedEvents } };
     }
-    case 'DELETE_EVENT':
-      return { ...state, history: { ...state.history, [todayKey]: today.filter(e => e.id !== action.id) } };
+    case 'DELETE_EVENT': {
+      const found = findEventDay(state.history, action.id);
+      if (!found) return state;
+      const { key } = found;
+      return { ...state, history: { ...state.history, [key]: state.history[key].filter(e => e.id !== action.id) } };
+    }
+
+    case 'LOAD_HISTORY': {
+      const todayEvents = action.history[todayKey] || [];
+      const activeSleepEv = todayEvents.find(e => e.type === 'sleep' && e.end === null);
+      const activeSleep: AppState['activeSleep'] = activeSleepEv
+        ? { id: activeSleepEv.id, start: activeSleepEv.start }
+        : null;
+      return { ...state, history: action.history, activeSleep, loaded: true };
+    }
+    case 'LOAD_GROWTH':
+      return { ...state, growth: action.growth };
 
     default: return state;
   }
@@ -181,7 +224,7 @@ function reducer(state: AppState, action: Action): AppState {
 // ─── Context ──────────────────────────────────────────────────────────────────
 interface AppContextValue {
   state: AppState;
-  dispatch: React.Dispatch<Action>;
+  dispatch: (action: Action) => void;
   tweaks: Tweaks;
   setTweak: <K extends keyof Tweaks>(key: K, value: Tweaks[K]) => void;
   palette: Palette;
@@ -190,7 +233,10 @@ interface AppContextValue {
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, undefined, buildInitialState);
+  const [state, rawDispatch] = useReducer(reducer, undefined, buildInitialState);
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; }, [state]);
+
   const [tweaks, setTweaks] = useState<Tweaks>(() => {
     if (typeof window === 'undefined') return TWEAK_DEFAULTS;
     try {
@@ -202,6 +248,127 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     try { localStorage.setItem('charlie-tweaks', JSON.stringify(tweaks)); } catch {}
   }, [tweaks]);
+
+  // ─── Firestore subscriptions ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!IS_FIREBASE) return;
+    const from = new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate() - 44);
+    const unsub1 = subscribeToHistory(from, history => rawDispatch({ type: 'LOAD_HISTORY', history }));
+    const unsub2 = subscribeToGrowth(growth => rawDispatch({ type: 'LOAD_GROWTH', growth }));
+    return () => { unsub1(); unsub2(); };
+  }, []);
+
+  // ─── Firestore write-through ─────────────────────────────────────────────
+  const handleFirestoreWrite = useCallback(async (action: Action) => {
+    const s = stateRef.current;
+    const todayStr = dateKey(TODAY);
+
+    switch (action.type) {
+      case 'START_SLEEP': {
+        const now = new Date();
+        const id = await fsAddEvent(
+          { type: 'sleep', start: now, end: null, dur: 0, data: { note: '' } },
+          todayStr,
+        );
+        rawDispatch({ type: 'SET_ACTIVE_SLEEP_ID', id });
+        break;
+      }
+      case 'STOP_SLEEP': {
+        if (s.activeSleep?.id) {
+          const now = new Date();
+          await fsUpdateEvent(s.activeSleep.id, {
+            end: now,
+            dur: durationMin(s.activeSleep.start, now),
+          });
+        }
+        break;
+      }
+      case 'ADD_FEED': {
+        const d = action.data;
+        const start = dateAtTime(TODAY, d.time.h, d.time.m);
+        const dur = d.kind === 'sein' ? 18 : 15;
+        await fsAddEvent(
+          { type: 'feed', start, end: new Date(start.getTime() + dur * 60000), dur,
+            data: { kind: d.kind, breast: d.breast ?? undefined, ml: d.ml, note: d.note } },
+          todayStr,
+        );
+        break;
+      }
+      case 'ADD_PUMP': {
+        const d = action.data;
+        const start = dateAtTime(TODAY, d.time.h, d.time.m);
+        await fsAddEvent(
+          { type: 'pump', start, end: start, dur: 0,
+            data: { breast: d.breast as 'G' | 'D' | 'GD', ml: d.ml, note: d.note } },
+          todayStr,
+        );
+        break;
+      }
+      case 'ADD_DIAPER': {
+        const d = action.data;
+        const start = dateAtTime(TODAY, d.time.h, d.time.m);
+        await fsAddEvent(
+          { type: 'diaper', start, end: start, dur: 0,
+            data: { pipi: d.pipi, caca: d.caca, color: d.color, note: d.note } },
+          todayStr,
+        );
+        break;
+      }
+      case 'ADD_CARE': {
+        const d = action.data;
+        const start = dateAtTime(TODAY, d.time.h, d.time.m);
+        await fsAddEvent(
+          { type: 'care', start, end: start, dur: 0,
+            data: { kind: d.kind, custom: d.custom, note: d.note } },
+          todayStr,
+        );
+        break;
+      }
+      case 'ADD_TEMP': {
+        const d = action.data;
+        const start = dateAtTime(TODAY, d.time.h, d.time.m);
+        await fsAddEvent(
+          { type: 'temp', start, end: start, dur: 0,
+            data: { value: d.value, slot: d.slot, note: d.note } },
+          todayStr,
+        );
+        break;
+      }
+      case 'ADD_GROWTH': {
+        const d = action.data;
+        await fsAddGrowth({ date: d.date, day: ageInDays(d.date), poids: d.poids, taille: d.taille, pc: d.pc });
+        break;
+      }
+      case 'EDIT_EVENT': {
+        const found = findEventDay(s.history, action.id);
+        if (!found) break;
+        const { ev } = found;
+        const dayDate = new Date(ev.start.getFullYear(), ev.start.getMonth(), ev.start.getDate());
+        const newStart = dateAtTime(dayDate, action.data.time.h, action.data.time.m);
+        const patch: Parameters<typeof fsUpdateEvent>[1] = {
+          start: newStart,
+          data: { ...ev.data, note: action.data.note },
+          date: dateKey(dayDate),
+        };
+        if (action.data.endTime) {
+          patch.end = dateAtTime(dayDate, action.data.endTime.h, action.data.endTime.m);
+          patch.dur = durationMin(newStart, patch.end!);
+        }
+        await fsUpdateEvent(action.id, patch);
+        break;
+      }
+      case 'DELETE_EVENT':
+        await fsDeleteEvent(action.id);
+        break;
+    }
+  }, []);
+
+  const dispatch = useCallback((action: Action) => {
+    rawDispatch(action);
+    if (IS_FIREBASE) {
+      handleFirestoreWrite(action).catch(err => console.error('[Firestore]', err));
+    }
+  }, [handleFirestoreWrite]);
 
   const setTweak = useCallback(<K extends keyof Tweaks>(key: K, value: Tweaks[K]) => {
     setTweaks(prev => ({ ...prev, [key]: value }));
