@@ -10,6 +10,8 @@ import { Sheet, Segmented, Stepper, FormHeader, FieldLabel, SubmitBar, TimeField
 import { SleepOverlay } from './ui/Primitives';
 import { IconMoonFilled, IconSleep, IconFeed, IconPump, IconDiaper, IconCare, IconTemp, IconPlus, IconPipi, IconCaca } from './ui/Icons';
 import { Palette } from '@/context/AppContext';
+import { isFirebaseConfigured } from '@/lib/firebase';
+import { useAuth } from '@/context/AuthContext';
 
 // ─── Event tile ───────────────────────────────────────────────────────────────
 function EventTile({ kind, tone, label, hint, primary, badge, onClick, mode = 'tracker', asleep = false, layout = 'grid_2' }: {
@@ -291,6 +293,7 @@ function EncodeSheet({ sheet, setSheet }: { sheet: { type: string; event?: AppEv
 // ─── Tracker Screen ───────────────────────────────────────────────────────────
 export default function TrackerScreen() {
   const { state, dispatch, tweaks, palette } = useApp();
+  const { signOut } = useAuth();
   const todayKey = dateKey(TODAY);
   const events = state.history[todayKey] || [];
   const stats = statsForDate(events);
@@ -324,11 +327,24 @@ export default function TrackerScreen() {
                   <div style={{ fontSize: 11.5, color: palette.inkSoft, marginTop: 3, fontWeight: 500 }}>{ageLabel(TODAY)} · {fmtDateFull(TODAY)}</div>
                 </div>
               </div>
-              {sleeping && (
-                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 999, background: '#3A3650', color: '#E8E6F3', fontSize: 11.5, fontWeight: 600, boxShadow: '0 6px 18px rgba(58,54,80,0.3)', animation: 'breathe 3.2s ease-in-out infinite', flexShrink: 0 }}>
-                  <IconMoonFilled size={12} /> dort
-                </div>
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                {sleeping && (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 999, background: '#3A3650', color: '#E8E6F3', fontSize: 11.5, fontWeight: 600, boxShadow: '0 6px 18px rgba(58,54,80,0.3)', animation: 'breathe 3.2s ease-in-out infinite' }}>
+                    <IconMoonFilled size={12} /> dort
+                  </div>
+                )}
+                {isFirebaseConfigured && !sleeping && (
+                  <button
+                    onClick={() => signOut()}
+                    title="Se déconnecter"
+                    style={{ width: 32, height: 32, borderRadius: 999, background: palette.soft, border: `0.5px solid ${palette.line}`, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.55 }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={palette.ink} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 

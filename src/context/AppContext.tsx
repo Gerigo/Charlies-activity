@@ -11,6 +11,7 @@ import {
 } from '@/lib/sampleData';
 import { subscribeToHistory, fsAddEvent, fsUpdateEvent, fsDeleteEvent } from '@/lib/firestore/events';
 import { subscribeToGrowth, fsAddGrowth } from '@/lib/firestore/growth';
+import { isFirebaseConfigured } from '@/lib/firebase';
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
 export const PALETTES = {
@@ -79,7 +80,7 @@ type Action =
   | { type: 'LOAD_HISTORY'; history: Record<string, AppEvent[]> }
   | { type: 'LOAD_GROWTH'; growth: GrowthPoint[] };
 
-const IS_FIREBASE = !!process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+const IS_FIREBASE = isFirebaseConfigured;
 
 function buildInitialState(): AppState {
   if (IS_FIREBASE) {
