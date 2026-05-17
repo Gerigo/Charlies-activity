@@ -1,21 +1,35 @@
-import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import type { Metadata, Viewport } from "next";
+import { Manrope, Instrument_Serif } from "next/font/google";
 import "./globals.css";
+import { AppProvider } from "@/context/AppContext";
 import BottomNav from "@/components/ui/BottomNav";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const manrope = Manrope({
+  variable: "--font-manrope",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const instrumentSerif = Instrument_Serif({
+  variable: "--font-instrument-serif",
   subsets: ["latin"],
+  weight: "400",
+  style: ["normal", "italic"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "Charlie's Activity",
+  title: "Charlie",
   description: "Suivi des activités de Charlie",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -24,15 +38,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="fr"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col bg-gray-50">
-        <main className="max-w-md mx-auto w-full flex-1 pb-20">
-          {children}
-        </main>
-        <BottomNav />
+    <html lang="fr" className={`${manrope.variable} ${instrumentSerif.variable}`}>
+      <body style={{ margin: 0, padding: 0, minHeight: '100dvh', fontFamily: 'var(--font-manrope)', WebkitFontSmoothing: 'antialiased' }}>
+        <AppProvider>
+          <div style={{ maxWidth: 430, margin: '0 auto', height: '100dvh', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+            <main style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+              {children}
+            </main>
+            <BottomNav />
+          </div>
+        </AppProvider>
       </body>
     </html>
   );
