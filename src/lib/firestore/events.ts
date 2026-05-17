@@ -13,19 +13,23 @@ export function subscribeToHistory(
   onUpdate: (history: Record<string, AppEvent[]>) => void,
   onError?: (err: Error) => void,
 ): () => void {
+  void fromDate; // window filter removed — dataset is small enough to load fully
   const q = query(collection(db, COL), where("trackerId", "==", LEGACY_SCOPE));
-  const fromMs = fromDate.getTime();
   return onSnapshot(
     q,
     snap => {
-      console.log(`[Charlie Firestore] events snapshot: ${snap.docs.length} docs`);
       const history: Record<string, AppEvent[]> = {};
+      let minMs = Infinity;
+      let maxMs = -Infinity;
+      let kept = 0;
       snap.docs.forEach(docSnap => {
         try {
-          const raw = docSnap.data();
-          const ev = legacyToAppEvent(docSnap.id, raw);
+          const ev = legacyToAppEvent(docSnap.id, docSnap.data());
           if (!ev) return; // growth or unknown type
-          if (ev.start.getTime() < fromMs) return; // outside the window
+          const ms = ev.start.getTime();
+          if (ms < minMs) minMs = ms;
+          if (ms > maxMs) maxMs = ms;
+          kept++;
           const key = dateKey(ev.start);
           if (!history[key]) history[key] = [];
           history[key].push(ev);
@@ -34,6 +38,11 @@ export function subscribeToHistory(
         }
       });
       Object.values(history).forEach(list => list.sort((a, b) => a.start.getTime() - b.start.getTime()));
+      console.log(
+        `[Charlie Firestore] events: ${snap.docs.length} docs → ${kept} kept across ${Object.keys(history).length} days |`,
+        kept ? `range ${new Date(minMs).toISOString().slice(0, 10)} → ${new Date(maxMs).toISOString().slice(0, 10)}` : 'none',
+        `| app TODAY ${new Date().toISOString().slice(0, 10)}`,
+      );
       onUpdate(history);
     },
     err => {
